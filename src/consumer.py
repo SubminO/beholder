@@ -29,4 +29,4 @@ class Server:
                 async with queue.iterator() as queue_iter:
                     async for message in queue_iter:
                         async with message.process():
-                            self.wssrv.send(message.body)
+                            await self.wssrv.send(message.body.decode())
