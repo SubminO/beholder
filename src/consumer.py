@@ -1,32 +1,35 @@
-import aio_pika
+from aio_pika import connect, IncomingMessage, ExchangeType
 
 
 class Server:
-    def __init__(self, wssrv, loop, queues: list, params):
-        self.wssrv = wssrv
+    def __init__(self, queues: dict, loop,  params):
         self.loop = loop
-        self.queues = ['speed_violation']
+        self.queues = queues
+
         self.host = params.rmqhost
         self.port = params.rmqport
         self.user = params.rmquser
         self.password = params.rmqpass
 
+    async def on_message(self, message: IncomingMessage):
+        with message.process():
+            await self.queues[message.routing_key](message.body.decode())
+
     async def handler(self):
         dsn = f"amqp://{self.user}:{self.password}@{self.host}:{self.port}/"
 
-        connection = await aio_pika.connect_robust(dsn, loop=self.loop)
+        connection = await connect(dsn, loop=self.loop)
 
-        async with connection:
-            # Creating channel
-            channel = await connection.channel()
+        channel = await connection.channel()
+        await channel.set_qos(prefetch_count=1)
 
-            # Declaring queue
-            for queue_name in self.queues:
-                queue = await channel.declare_queue(
-                    queue_name, auto_delete=True
-                )
+        exchange = await channel.declare_exchange(
+            'beholder', ExchangeType.DIRECT
+        )
 
-                async with queue.iterator() as queue_iter:
-                    async for message in queue_iter:
-                        async with message.process():
-                            await self.wssrv.send(message.body.decode())
+        queue = await channel.declare_queue(durable=True)
+
+        for routing_key in self.queues.keys():
+            await queue.bind(exchange, routing_key=routing_key)
+
+        await queue.consume(self.on_message)
